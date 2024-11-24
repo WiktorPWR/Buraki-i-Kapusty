@@ -5,6 +5,7 @@ import sys
 import cv2
 import numpy as np
 import tensorflow as tf
+from enum import Enum
 
 # Funkcja do tworzenia Feature z typu int64
 def _init64_feature(value):
@@ -95,17 +96,19 @@ addrs_kapusta_test = glob.glob(kapusta_test_path)
 addrs_buraki_test = glob.glob(buraki_test_path)
 
 # Etykiety dla poszczególnych zestawów danych
-labels_10= list(range(10))  # Etykiety dla testów (przykład: 10 klas)
-labels_100 = list(range(100))  # Etykiety dla treningu i walidacji (przykład: 100 klas)
+
+Kapusta = 1
+Burak = 0
+
 
 # Tworzenie plików TFRecord dla zestawów treningowych
-createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_train.tfrecords'), addrs=addrs_kapusta_train, labels=labels_100)
-createDataRecord(os.path.join(base_dir, 'tfrecords/burak_train.tfrecords'), addrs=addrs_buraki_train, labels=labels_100)
+createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_train.tfrecords'), addrs=addrs_kapusta_train, labels=[Kapusta] * len(addrs_kapusta_train))
+createDataRecord(os.path.join(base_dir, 'tfrecords/burak_train.tfrecords'), addrs=addrs_buraki_train, labels=[Burak] * len(addrs_buraki_train))
 
 # Tworzenie plików TFRecord dla zestawów walidacyjnych
-createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_validation.tfrecords'), addrs=addrs_kapusta_validation, labels=labels_10)
-createDataRecord(os.path.join(base_dir, 'tfrecords/burak_validation.tfrecords'), addrs=addrs_buraki_validation, labels=labels_10)
+createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_validation.tfrecords'), addrs=addrs_kapusta_validation, labels=[Kapusta] * len(addrs_kapusta_validation))
+createDataRecord(os.path.join(base_dir, 'tfrecords/burak_validation.tfrecords'), addrs=addrs_buraki_validation, labels=[Burak] * len(addrs_buraki_validation))
 
 # Tworzenie plików TFRecord dla zestawów testowych
-createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_test.tfrecords'), addrs=addrs_kapusta_test, labels=labels_10)
-createDataRecord(os.path.join(base_dir, 'tfrecords/burak_test.tfrecords'), addrs=addrs_buraki_test, labels=labels_10)
+createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_test.tfrecords'), addrs=addrs_kapusta_test, labels=[Kapusta] * len(addrs_kapusta_test))
+createDataRecord(os.path.join(base_dir, 'tfrecords/burak_test.tfrecords'), addrs=addrs_buraki_test, labels=[Burak] * len(addrs_buraki_test))
