@@ -1,17 +1,16 @@
-from random import shuffle
 import glob
 import os
 import sys
 import cv2
 import numpy as np
 import tensorflow as tf
-from PIL import Image  # Dodajemy bibliotekę Pillow
+
+from PIL import Image
+from matplotlib import pyplot as plt
 
 # Funkcja do naprawy profilu obrazu
 def fix_image_profile(image_path):
-    """
-    Naprawia profil kolorów obrazu, zapisując go ponownie.
-    """
+    """Naprawia profil kolorów obrazu, zapisując go ponownie."""
     try:
         img = Image.open(image_path)
         img.save(image_path)  # Pillow automatycznie usuwa błędny profil kolorów
@@ -42,42 +41,85 @@ def load_image(addr):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img
 
-# Funkcja do tworzenia pliku TFRecord z obrazów i etykiet
-def createDataRecord(out_filename, addrs, labels):
+def split_data(path, size=(224, 224), batch_size=32, train_part=0.7, val_part=0.2, test_part=0.1):
+    """Podział danych na zbiory treningowe, walidacyjne i testowe.
+
+    Args:
+        path (str): Ścieżka do katalogu z danymi.
+        size (tuple, optional): Rozmiar obrazów. Domyślnie (224, 224).
+        batch_size (int, optional): Rozmiar partii danych. Domyślnie 32.
+        train_part (float, optional): Proporcja danych treningowych. Domyślnie 0.7 (70%).
+        val_part (float, optional): Proporcja danych walidacyjnych. Domyślnie 0.2 (20%).
+        test_part (float, optional): Proporcja danych testowych. Domyślnie 0.1 (10%).
+
+    Returns:
+        tuple: Zbiory danych (train_dataset, val_dataset, test_dataset).
+    """
+    dataset = tf.keras.utils.image_dataset_from_directory(
+        path,
+        image_size=size,
+        batch_size=batch_size
+    )
+
+    # Podział rozmiarów zbiorów
+    dataset_size = len(dataset)
+    train_size = int(dataset_size * train_part)
+    val_size = int(dataset_size * val_part)
+    test_size = int(dataset_size * test_part)
+
+    train_dataset = dataset.take(train_size)
+    val_dataset = dataset.skip(train_size).take(val_size)
+    test_dataset = dataset.skip(train_size + val_size).take(test_size)
+
+    print(f"Rozmiar zbioru pełnego: {len(dataset)}")
+    print(f"Rozmiar poszczególnych zbiorów: Train: {len(train_dataset)}, Validation: {len(val_dataset)}, Test: {len(test_dataset)}")
+
+    # Normalizacja obrazów
+    normalization_layer = tf.keras.layers.Rescaling(1./255)
+
+    train_dataset = train_dataset.map(lambda x, y: (normalization_layer(x), y))
+    val_dataset = val_dataset.map(lambda x, y: (normalization_layer(x), y))
+    test_dataset = test_dataset.map(lambda x, y: (normalization_layer(x), y))
+
+    return train_dataset, val_dataset, test_dataset
+
+def create_data_record(dataset, tfrecords_dir, record_name):
+    """Tworzenie plików TFRecord z podanego zestawu danych.
+
+    Args:
+        dataset (tf.data.Dataset): Zestaw danych zawierający obrazy i etykiety.
+        tfrecords_dir (str): Ścieżka do katalogu, w którym zostanie zapisany plik TFRecord.
+        record_name (str): Nazwa pliku TFRecord (bez rozszerzenia).
+    """
+    # Nazwa pliku wyjściowego
+    out_filename = os.path.join(tfrecords_dir, record_name + '.tfrecords')
+    print(f"Zapisywanie pliku: {out_filename}")
+    
     try:
         # Inicjalizacja writera do zapisu pliku TFRecord
         writer = tf.io.TFRecordWriter(out_filename)
         
         # Iteracja przez wszystkie obrazy w zestawie
-        for i in range(len(addrs)):
-            if not i % 1:  # co 1 iterację wypisujemy status
-                print('Train data: {}/{}'.format(i, len(addrs)))
-                sys.stdout.flush()
-            
-            # Wczytanie obrazu
-            img = load_image(addrs[i])
+        for batch in dataset:
+            images, labels = batch
+            for image, label in zip(images, labels):
+                # Konwersja obrazu do numpy array
+                img = image.numpy()
+                label = label.numpy()
 
-            # Pobranie etykiety dla obrazu
-            label = labels[i]
+                # Przygotowanie feature'ów dla TFRecord
+                depth = img.shape[2]  # Dodanie głębi obrazu
+                feature = {
+                    'image_raw': _bytes_feature(img.tobytes()), # Obraz zapisany jako bytes
+                    'label': _init64_feature(label),            # Etykieta jako int64
+                    'depth': _init64_feature(depth)             # Głębia obrazu jako int64
+                }
 
-            # Jeśli obraz jest pusty lub ma niewłaściwe wymiary, pomijamy
-            if img is None or img.shape != (224, 224, 3):
-                print(f"Pomijam obraz o niepoprawnych wymiarach: {addrs[i]}")
-                continue
+                # Tworzenie obiektu Example z feature'ami
+                example = tf.train.Example(features=tf.train.Features(feature=feature))
 
-            # Przygotowanie feature'ów dla TFRecord
-            depth = img.shape[2]  # Dodanie głębi obrazu
-            feature = {
-                'image_raw': _bytes_feature(img.tobytes()),  # Obraz zapisany jako bytes
-                'label': _init64_feature(label),            # Etykieta jako int64
-                'depth': _init64_feature(depth)             # Głębia obrazu jako int64
-            }
-
-            # Tworzenie obiektu Example z feature'ami
-            example = tf.train.Example(features=tf.train.Features(feature=feature))
-
-            # Zapisanie example do pliku TFRecord
-            writer.write(example.SerializeToString())
+                # Zapisanie example do pliku TFRecord
+                writer.write(example.SerializeToString())
 
         # Zamknięcie writera po zakończeniu zapisu
         writer.close()
@@ -86,10 +128,17 @@ def createDataRecord(out_filename, addrs, labels):
     except Exception as e:
         # Obsługa wyjątków i błędów
         print(f"Wystąpił błąd przy zapisywaniu pliku {out_filename}: {e}")
+        
+def display_random_image(tfrecords_dir, record_name):
+    """Wyświetla losowy obraz z pliku TFRecord.
 
-# Funkcja do testowania danych w pliku TFRecord
-def display_random_image(tfrecord_path):
-    raw_dataset = tf.data.TFRecordDataset(tfrecord_path)
+    Args:
+        tfrecords_dir (str): Ścieżka do katalogu zawierającego pliki TFRecord.
+        record_name (str): Nazwa pliku TFRecord (bez rozszerzenia).
+    """
+    # Wczytanie pliku TFRecord
+    tfrecord_file_path = os.path.join(tfrecords_dir, record_name + '.tfrecords')
+    raw_dataset = tf.data.TFRecordDataset(tfrecord_file_path)
     
     feature_description = {
         'image_raw': tf.io.FixedLenFeature([], tf.string),
@@ -104,7 +153,8 @@ def display_random_image(tfrecord_path):
     
     for record in parsed_dataset.take(1):  # Pobieramy pierwszy rekord
         img_raw = record['image_raw'].numpy()
-        img = np.frombuffer(img_raw, dtype=np.uint8).reshape((224, 224, 3))  # Odtworzenie obrazu
+        img = np.frombuffer(img_raw, dtype=np.float32)
+        img = img.reshape((224, 224, 3))  # Odtworzenie obrazu
         label = record['label'].numpy()
         depth = record['depth'].numpy()
         print(f"Etykieta: {label}, Głębia: {depth}")
@@ -115,45 +165,14 @@ def display_random_image(tfrecord_path):
         cv2.destroyAllWindows()
 
 # Zmienna bazowa, która wskazuje główny katalog
-base_dir = 'D:/Pulpit/PWR/neuronowe'
+data_dir = 'data'
+tfrecords_dir = 'tfrecords'
 
-# Ścieżki do obrazów dla zestawów treningowych
-kapusta_train_path = os.path.join(base_dir, 'kapusta_buraki/kapusta/train/*.*')
-buraki_train_path = os.path.join(base_dir, 'kapusta_buraki/buraki/train/*.*')
+train_dataset, val_dataset, test_dataset = split_data(data_dir, batch_size=10)
 
-# Ścieżki do obrazów dla zestawów walidacyjnych
-kapusta_validation_path = os.path.join(base_dir, 'kapusta_buraki/kapusta/validation/*.*')
-buraki_validation_path = os.path.join(base_dir, 'kapusta_buraki/buraki/validation/*.*')
-
-# Ścieżki do obrazów dla zestawów testowych
-kapusta_test_path = os.path.join(base_dir, 'kapusta_buraki/kapusta/test/*.*')
-buraki_test_path = os.path.join(base_dir, 'kapusta_buraki/buraki/test/*.*')
-
-# Pobieranie listy plików (ścieżek do obrazów) z katalogów
-addrs_kapusta_train = glob.glob(kapusta_train_path)
-addrs_buraki_train = glob.glob(buraki_train_path)
-
-addrs_kapusta_validation = glob.glob(kapusta_validation_path)
-addrs_buraki_validation = glob.glob(buraki_validation_path)
-
-addrs_kapusta_test = glob.glob(kapusta_test_path)
-addrs_buraki_test = glob.glob(buraki_test_path)
-
-# Etykiety dla poszczególnych zestawów danych
-Kapusta = 1
-Burak = 0
-
-# Tworzenie plików TFRecord dla zestawów treningowych
-createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_train.tfrecords'), addrs=addrs_kapusta_train, labels=[Kapusta] * len(addrs_kapusta_train))
-createDataRecord(os.path.join(base_dir, 'tfrecords/burak_train.tfrecords'), addrs=addrs_buraki_train, labels=[Burak] * len(addrs_buraki_train))
-
-# Tworzenie plików TFRecord dla zestawów walidacyjnych
-createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_validation.tfrecords'), addrs=addrs_kapusta_validation, labels=[Kapusta] * len(addrs_kapusta_validation))
-createDataRecord(os.path.join(base_dir, 'tfrecords/burak_validation.tfrecords'), addrs=addrs_buraki_validation, labels=[Burak] * len(addrs_buraki_validation))
-
-# Tworzenie plików TFRecord dla zestawów testowych
-createDataRecord(os.path.join(base_dir, 'tfrecords/kapusta_test.tfrecords'), addrs=addrs_kapusta_test, labels=[Kapusta] * len(addrs_kapusta_test))
-createDataRecord(os.path.join(base_dir, 'tfrecords/burak_test.tfrecords'), addrs=addrs_buraki_test, labels=[Burak] * len(addrs_buraki_test))
+create_data_record(train_dataset, tfrecords_dir, 'train')
+create_data_record(val_dataset, tfrecords_dir, 'val')
+create_data_record(test_dataset, tfrecords_dir, 'test')
 
 # Test: Wyświetl losowy obraz z jednego z plików TFRecord
-display_random_image(os.path.join(base_dir, 'tfrecords/kapusta_train.tfrecords'))
+display_random_image(tfrecords_dir, 'train')
