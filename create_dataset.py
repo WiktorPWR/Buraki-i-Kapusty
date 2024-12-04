@@ -24,7 +24,12 @@ def _init64_feature(value):
 
 # Funkcja do tworzenia Feature z typu bytes
 def _bytes_feature(value):
-    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+    """Funkcja tworząca Feature z typu bytes."""
+    if isinstance(value, bytes):
+        return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+    else:
+        raise ValueError("Wartość musi być w formacie bytes")
+
 
 # Funkcja do wczytywania i przetwarzania obrazu
 def load_image(addr):
@@ -41,7 +46,7 @@ def load_image(addr):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img
 
-def split_data(path, size=(224, 224), batch_size=32, train_part=0.7, val_part=0.2, test_part=0.1):
+def split_data(path, size=(224, 224), batch_size=1, train_part=0.7, val_part=0.2, test_part=0.1):
     """Podział danych na zbiory treningowe, walidacyjne i testowe.
 
     Args:
@@ -84,50 +89,41 @@ def split_data(path, size=(224, 224), batch_size=32, train_part=0.7, val_part=0.
     return train_dataset, val_dataset, test_dataset
 
 def create_data_record(dataset, tfrecords_dir, record_name):
-    """Tworzenie plików TFRecord z podanego zestawu danych.
-
-    Args:
-        dataset (tf.data.Dataset): Zestaw danych zawierający obrazy i etykiety.
-        tfrecords_dir (str): Ścieżka do katalogu, w którym zostanie zapisany plik TFRecord.
-        record_name (str): Nazwa pliku TFRecord (bez rozszerzenia).
-    """
-    # Nazwa pliku wyjściowego
+    """Tworzenie plików TFRecord z podanego zestawu danych."""
     out_filename = os.path.join(tfrecords_dir, record_name + '.tfrecords')
     print(f"Zapisywanie pliku: {out_filename}")
     
     try:
-        # Inicjalizacja writera do zapisu pliku TFRecord
         writer = tf.io.TFRecordWriter(out_filename)
         
-        # Iteracja przez wszystkie obrazy w zestawie
         for batch in dataset:
             images, labels = batch
-            for image, label in zip(images, labels):
-                # Konwersja obrazu do numpy array
+            for i, (image, label) in enumerate(zip(images, labels)):
                 img = image.numpy()
                 label = label.numpy()
 
-                # Przygotowanie feature'ów dla TFRecord
-                depth = img.shape[2]  # Dodanie głębi obrazu
+                # Zapisanie obrazu do pliku JPEG (do debugowania)
+                img_to_save = tf.convert_to_tensor(img, dtype=tf.uint8)
+                jpeg_image = tf.io.encode_jpeg(img_to_save)
+                jpeg_image_path = os.path.join(tfrecords_dir, f"image_{i}.jpg")
+                tf.io.write_file(jpeg_image_path, jpeg_image)  # Zapisz obraz na dysku
+                print(f"Zapisano obraz JPEG: {jpeg_image_path}")
+                
                 feature = {
-                    'image_raw': _bytes_feature(img.tobytes()), # Obraz zapisany jako bytes
-                    'label': _init64_feature(label),            # Etykieta jako int64
-                    'depth': _init64_feature(depth)             # Głębia obrazu jako int64
+                    'image_raw': _bytes_feature(jpeg_image.numpy()),  # Obraz zapisany jako bytes (JPEG)
+                    'label': _init64_feature(label),
+                    'depth': _init64_feature(img.shape[2])  # Głębia obrazu
                 }
 
-                # Tworzenie obiektu Example z feature'ami
                 example = tf.train.Example(features=tf.train.Features(feature=feature))
-
-                # Zapisanie example do pliku TFRecord
                 writer.write(example.SerializeToString())
 
-        # Zamknięcie writera po zakończeniu zapisu
         writer.close()
         print(f"Zapisano plik: {out_filename}")
     
     except Exception as e:
-        # Obsługa wyjątków i błędów
         print(f"Wystąpił błąd przy zapisywaniu pliku {out_filename}: {e}")
+
         
 def display_random_image(tfrecords_dir, record_name):
     """Wyświetla losowy obraz z pliku TFRecord.
@@ -153,11 +149,18 @@ def display_random_image(tfrecords_dir, record_name):
     
     for record in parsed_dataset.take(1):  # Pobieramy pierwszy rekord
         img_raw = record['image_raw'].numpy()
-        img = np.frombuffer(img_raw, dtype=np.float32)
-        img = img.reshape((224, 224, 3))  # Odtworzenie obrazu
+        print(f"Rozmiar surowego obrazu przed dekodowaniem: {len(img_raw)} bajtów")
+
+        img = tf.image.decode_jpeg(img_raw, channels=3)  # Dekodowanie obrazu JPEG
+        img = img.numpy()  # Konwertowanie na NumPy array
+        print(f"Obraz po dekodowaniu ma rozmiar: {img.shape}")
+        
         label = record['label'].numpy()
         depth = record['depth'].numpy()
+        
         print(f"Etykieta: {label}, Głębia: {depth}")
+
+        print(f"Obraz do wyświetlenia ma rozmiar: {img.shape}")
         
         # Wyświetlenie obrazu
         cv2.imshow("Obraz z TFRecord", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
@@ -168,7 +171,7 @@ def display_random_image(tfrecords_dir, record_name):
 data_dir = 'data'
 tfrecords_dir = 'tfrecords'
 
-train_dataset, val_dataset, test_dataset = split_data(data_dir, batch_size=10)
+train_dataset, val_dataset, test_dataset = split_data(data_dir, batch_size=1)
 
 create_data_record(train_dataset, tfrecords_dir, 'train')
 create_data_record(val_dataset, tfrecords_dir, 'val')
